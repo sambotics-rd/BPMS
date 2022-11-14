@@ -1,0 +1,1823 @@
+#include <EEPROM.h>
+#include <Wire.h>
+#include "RTClib.h"
+#include <TinyGPS++.h>
+TinyGPSPlus gps;
+RTC_DS3231 rtc;
+//for RFID
+#include <MFRC522.h>
+#include <SPI.h>
+#include <avr/sleep.h>
+
+unsigned long lastSlept = 0;
+unsigned long goTosleepNow = 300000; //5m;
+
+unsigned long lastConnectionTime = 0;
+const unsigned long connectionInterval = 20000; //20s
+
+#define SAD 10
+#define RST 9
+
+//MFRC522 nfc(SAD, RST);
+
+const int addip = 15, addhost = 45, addapn = 75, addde = 145, addline = 165,
+          addy = 185, addmo = 195, addda = 205, addh = 215, addmi = 225, adds = 235,
+          addc1 = 245, addunl = 265, wrapEE = 270, noEE = 275, adEE = 280, adgpsstate = 285, adlat = 290, adlong = 300, sleepTime = 305; //TO 320
+int nosave = 0, connection = 1, addr = 320;
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+int TimeCard = 0;
+int gps_status = 0;
+String card1 = "";
+int yearset, monthset, dayset, hourset, minuteset, secondset;
+int yearunlock, monthunlock, dayunlock, hourunlock, minuteunlock, secondunlock;
+int yearunlock2, monthunlock2, dayunlock2, hourunlock2, minuteunlock2, secondunlock2;
+
+//String line, ip, host, id, apn = "";
+String id = "B210001";//
+String ip = "\"botowrap.com\"";
+String host = "botowrap.com";
+String line = ""; //08160608439
+int port = 80;
+String apn = "AT+CSTT=\"web.gprs.mtnnigeria.net\",\"wap\",\"wap\"";
+//String apn = "AT+CSTT=\"internet.ng.airtel.com\",\"wap\",\"wap\"";
+//String apn = "AT+CSTT=\"TM\",\"\",\"\"";
+//String apn = "AT+CSTT=\"bpms.vodafone.iot\",\"\",\"\"";
+
+String SendCmd = "AT+CIPSEND=";
+String Start = "AT+CIPSTART=\"TCP\"";
+int  locationchanged = 0;
+int D, C;
+int d = 0, chReset = 0;
+int xa = 1, ab = 1, ef = 1;
+int temper = 0;
+int bat = 0;
+float vin = 0.0;
+int GPS_Checker = 0;
+int wrapstate, wrap_hold;
+//String Sealcard, Unsealcard = "";
+String Sealcard = "00", Unsealcard = "00",  usedcard = "00";
+String event = "", ut = "";
+String Date = "";
+String Time = "";
+String Lat = "0.00000", Long = "0.00000";
+String LAT, LAT2, LONG, LONG2 = "";
+bool senddata = true;
+bool access = false;
+bool access2 = false;
+int unlock = 0;
+int a = 1, cd = 1, ac , b, c, e, tf = 0;
+int maxsave;
+int temper_sms = 0;
+int temper_sms2 = 0;
+const int wakePin = 2;
+const int buzzer = 24;//
+const int temper_1 = 41;//
+const int temper_2 = 8;//
+const int seal = 40;//
+const int motor_forward = 26;//
+const int motor_backward = 25;//
+const int red_led = 36;//
+const int green_led = 38;//
+const int readbat = A2;
+const int charging_voltage = A3;
+const int charging = A5;
+const int fullycharge = A6;
+const int gsm_ctrl = A0;
+const int gsm_status = 4;
+const int bt_ctrl = 11;
+const int gps_ctrl = 27;
+const int nfc_ctrl = 12;
+const int mcuReset = 13;
+const int key = 6;
+int relate = 1;
+int sucess = 0;
+
+int remoteRequest_state = 0;
+String remoteRequest = "no";
+String Surl2 = "";
+int j;
+byte keyA[6] = { 0x66, 0x55, 0x12, 0x66, 0x88, 0x34 };
+//byte keyB[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, };
+
+void setup() {
+  pinMode(temper_1, INPUT);
+  pinMode(temper_2, INPUT);
+  pinMode(seal, INPUT);
+  pinMode(wakePin, INPUT_PULLUP);
+  pinMode(motor_forward, OUTPUT);
+  pinMode(motor_backward, OUTPUT);
+  pinMode(red_led, OUTPUT);
+  pinMode(green_led, OUTPUT);
+  pinMode(buzzer, OUTPUT);
+  pinMode(gsm_ctrl, OUTPUT);
+  pinMode(gps_ctrl, OUTPUT);
+  pinMode(bt_ctrl, OUTPUT);
+  pinMode(nfc_ctrl, OUTPUT);
+  pinMode(mcuReset, OUTPUT);
+  pinMode(key, OUTPUT);
+  pinMode(gsm_status, INPUT);// GSM STATUS
+  analogReference(INTERNAL1V1);//1.1v for mega.
+
+  digitalWrite(mcuReset, LOW);
+  digitalWrite(key, LOW);
+  digitalWrite(temper_1, HIGH);
+  digitalWrite(temper_2, HIGH);
+  digitalWrite(seal, HIGH);
+  digitalWrite(motor_forward, LOW);
+  digitalWrite(motor_backward, LOW);
+  digitalWrite(red_led, HIGH);
+  digitalWrite(green_led, HIGH);
+  digitalWrite(gps_ctrl, HIGH);
+  digitalWrite(bt_ctrl, HIGH);
+  digitalWrite(nfc_ctrl, HIGH);
+  attachInterrupt(0, wakeUp, LOW);
+
+  Serial.begin(9600); //bluetooth
+  Serial1.begin(9600);//gps
+  //  SPI.begin();
+  //  nfc.begin();
+  rtc.begin();
+
+  digitalWrite(buzzer, HIGH);
+  delay(100);
+  digitalWrite(buzzer, LOW);
+  delay(100);
+  digitalWrite(buzzer, HIGH);
+  delay(100);
+  digitalWrite(buzzer, LOW);
+
+
+  getsavedsettings();
+  //  EEPROM.get(wrapEE, wrapstate);
+  //  if (wrapstate < 0)
+  //    wrapstate = 0;
+  //  delay(100);
+  if (!digitalRead(seal)) //closeD
+    wrapstate = 1;
+  if (digitalRead(seal)) //open
+    wrapstate = 0;
+
+  D = wrapstate;
+  wrap_hold = wrapstate;
+  C = !D;
+  EEPROM.put(wrapEE, wrapstate);
+
+  int lent = card1.length();
+  for (int i = 0; i < lent; i++) {
+    j = i;
+    if (card1.substring(i, i + 1) == "A") {
+      j = i; break;
+    }
+  }
+
+
+  //  digitalWrite(buzzer, HIGH);
+  //  delay(1000);
+  digitalWrite(buzzer, LOW);
+  Serial.print("wrapstate=");
+  Serial.print(wrapstate);
+  Serial.print(" D=");
+  Serial.print(D);
+  Serial.print("   C=");
+  Serial.println(C);
+  initGSM();
+  GSM_SET_TIME();
+}
+
+void GSM_SET_TIME() {
+  while (1) {
+    Serial2.println("AT+CCLK?");
+    delay(500);
+    CheckWhenBusy();
+
+    if (Serial2.available() > 0)
+    {
+      delay(10);
+      String data = Serial2.readString();
+      int dataTime = data.indexOf("\"");
+      if (dataTime >= 5) {
+        String yearR = "20" + data.substring(dataTime + 1, dataTime + 3);
+        String monthR = data.substring(dataTime + 4, dataTime + 6);
+        String dayR = data.substring(dataTime + 7, dataTime + 9);
+        String hourR = data.substring(dataTime + 10, dataTime + 12);
+        String minuteR = data.substring(dataTime + 13, dataTime + 15);
+        String secondR = data.substring(dataTime + 16, dataTime + 18);
+
+        int year_set = yearR.toInt();
+        int month_set = monthR.toInt();
+        int day_set = dayR.toInt();
+        int hour_set = hourR.toInt();
+        int minute_set = minuteR.toInt();
+        int second_set = secondR.toInt();
+
+        yearset = year_set;
+        monthset = month_set;
+        dayset = day_set;
+        hourset = hour_set;
+        minuteset = minute_set;
+        secondset = second_set;
+      }
+    }
+
+    cd = cd + 1;
+
+    if (cd > 3) {
+      if (yearset > 2020) {
+        Serial.print("Device Time set to: ");
+        Serial.print(yearset);
+        Serial.print('/');
+        Serial.print(monthset);
+        Serial.print('/');
+        Serial.print(dayset);
+        Serial.print("  ");
+        Serial.print(hourset);
+        Serial.print(':');
+        Serial.print(minuteset);
+        Serial.print(':');
+        Serial.println(secondset);
+        rtc.adjust(DateTime(yearset, monthset, dayset, hourset, minuteset, secondset));
+        cd = 1;
+        break;
+      }
+      else {
+        Serial.println("Device Time NOT set");
+        cd = 1;
+        break;
+      }
+      break;
+    }
+  }
+}
+void wakeUp() {
+  sleep_disable();
+  detachInterrupt(0);
+}
+void sleepNow() {
+  sleep_enable();
+  attachInterrupt(0, wakeUp, LOW);
+  offGSM();
+  digitalWrite(SAD, LOW);
+  digitalWrite(RST, LOW);
+  digitalWrite(gps_ctrl, LOW);
+  digitalWrite(nfc_ctrl, LOW);
+  digitalWrite(bt_ctrl, LOW);
+  digitalWrite(key, HIGH);
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  delay(1000);
+  sleep_cpu();
+  digitalWrite(nfc_ctrl, HIGH);
+  lastSlept = millis();
+}
+
+void onGSM()
+{
+  int w = 1;
+
+  if (digitalRead(gsm_status) == 0) {
+    while (1) {
+      w = w + 1;
+      digitalWrite(gsm_ctrl, HIGH);
+      CheckWhenBusy();
+      delay(2000);
+      CheckWhenBusy();
+      delay(1000);
+      digitalWrite(gsm_ctrl, LOW);
+      delay(100);
+
+      if (digitalRead(gsm_status) == 1)
+        break;
+
+      if (w > 4) {
+        break;
+      }
+    }
+  }
+}
+
+void offGSM()
+{
+  int v = 1;
+
+  if (digitalRead(gsm_status) == 1) {
+    while (1) {
+      v = v + 1;
+      digitalWrite(gsm_ctrl, HIGH);
+      CheckWhenBusy();
+      delay(2000);
+      CheckWhenBusy();
+      delay(1000);
+      digitalWrite(gsm_ctrl, LOW);
+      delay(100);
+
+      if (digitalRead(gsm_status) == 0)
+        break;
+      if (v > 4) {
+        break;
+      }
+    }
+  }
+}
+
+void loop() {
+  DateTime now = rtc.now();
+  bluetoothsetup();
+  gpsget();
+  DateTimeupdate();
+  Read_card();
+  control();
+  CLOSE();
+  gsmreceived();
+  tempercheck();
+  battery_voltage();
+
+  if (digitalRead(nfc_ctrl) != 1)
+    digitalWrite(nfc_ctrl, HIGH);
+
+  if (millis() - lastSlept > goTosleepNow) {
+    sleepNow();
+  }
+
+  if ((now.year() == yearunlock) && (now.month() == monthunlock) && (now.day() == dayunlock)
+      && (now.hour() >= hourunlock) && (now.minute() >= minuteunlock)) {
+    unlock = 1;
+    EEPROM.put(addunl, unlock);
+  }
+
+
+  if (millis() - lastConnectionTime > connectionInterval) {
+
+    EEPROM.get(noEE, nosave);
+    DateTime now = rtc.now();
+    if (now.year() < 2022)
+      GSM_SET_TIME();
+
+    if (wrapstate == 0)
+      digitalWrite(gps_ctrl, LOW);
+    if (wrapstate == 1)
+      digitalWrite(gps_ctrl, HIGH);
+
+
+    if ((wrapstate == 0) && (nosave == 0))
+    {
+      if (digitalRead(gsm_status))
+        offGSM();
+    }
+    if ((wrapstate == 1) || (nosave > 0)) {
+      if (!digitalRead(gsm_status))
+        initGSM();
+    }
+
+    if (digitalRead(gsm_status) == 1) {
+      while (1)
+      {
+        if (xa == 1)
+        {
+          sendsaveddata(); //this is here
+          Serial2.println("AT+CIPSHUT");
+
+          lastConnectionTime = millis();
+          xa = 2;
+          break;
+        }
+        else if (xa == 2)
+        {
+          dataReceive();
+          Serial2.println("AT+CIPSHUT");
+          lastConnectionTime = millis();
+          xa = 3;
+          break;
+        }
+        else if (xa == 3)
+        {
+          dataReceive();
+          Serial2.println("AT+CIPSHUT");
+          CheckWhenBusy();
+          GSM_SET_TIME();
+          lastConnectionTime = millis();
+          xa = 1;
+          break;
+        }
+        else {
+          GSM_SET_TIME();
+          lastConnectionTime = millis();
+          CheckWhenBusy();
+          xa = 1;
+          break;
+        }
+      }
+    }
+    lastConnectionTime = millis();
+  }
+
+  if ((locationchanged == 1) || (TimeCard == 1) || (temper == 1) || (wrap_hold != wrapstate)) {
+
+    if (digitalRead(gsm_status) == 1) {
+      dataSend(); Serial2.println("AT + CIPSHUT");
+      temper = 0;
+      TimeCard = 0;
+      wrap_hold = wrapstate;
+      locationchanged = 0;
+      lastConnectionTime = millis();
+    }
+    if (digitalRead(gsm_status) == 0) {
+      onGSM();
+      dataSend();
+      temper = 0;
+      TimeCard = 0;
+      wrap_hold = wrapstate;
+      locationchanged = 0;
+      lastConnectionTime = millis();
+    }
+  }
+  delay(200);
+}
+
+void tempercheck() {
+  if (digitalRead(temper_1)) {
+    if (temper_sms == 0) {
+      //SendMessage();
+      temper = 1;
+      temper_sms = 1;
+      event = "&S=TP_N&TP=1";
+    }
+  }
+  if (!digitalRead(temper_1)) {
+    if (temper_sms == 1) {
+      //SendMessage();
+      temper = 1;
+      temper_sms = 0;
+      event = "&S=TP_N&TP=0";
+    }
+  }
+
+  if (digitalRead(temper_2)) {
+    if (temper_sms2 == 0) {
+      //SendMessage();
+      temper = 1;
+      temper_sms2 = 1;
+      event = "&S=TP_S&TP=1";
+    }
+  }
+  if (!digitalRead(temper_2)) {
+    if (temper_sms2 == 1) {
+      //SendMessage();
+      temper = 1;
+      temper_sms2 = 0;
+      event = "&S=TP_S&TP=0";
+    }
+  }
+}
+
+
+void control()
+{
+  if (access)
+  {
+    EEPROM.get(addunl, unlock);
+    if (unlock == 1)
+    {
+      if (C == 0)
+      {
+        OPEN();
+        event = "&S=WS&C=" + usedcard;
+        usedcard = "";
+        access = false;
+      }
+      else {
+        access = false;
+      }
+    }
+    else {
+      tone(buzzer, 4000);
+      delay(50);
+      noTone(buzzer);
+      delay(50);
+      tone(buzzer, 4000);
+      delay(50);
+      noTone(buzzer);
+      delay(50);
+      access = false;
+    }
+  }
+
+
+  if (access2)
+  {
+    if (C == 0)
+    {
+      OPEN();
+      event = "&S=WS&C=" + usedcard;
+      usedcard = "";
+      access2 = false;
+    }
+    else {
+      access2 = false;
+    }
+  }
+}
+
+void OPEN() {
+  if (wrapstate == 1)
+  {
+    if (C == 0) {
+      while (1) {
+        digitalWrite(motor_forward, LOW);
+        digitalWrite(motor_backward, HIGH);
+        delay(500);
+        digitalWrite(motor_forward, LOW);
+        digitalWrite(motor_backward, LOW);
+        //digitalWrite(green_led, LOW);
+        tone(buzzer, 3000);
+        delay(50);
+        noTone(buzzer);
+        //digitalWrite(green_led, HIGH);
+        C = 1;
+        D = 0;
+        wrapstate = 0;
+        EEPROM.put(wrapEE, wrapstate);
+        break;
+      }
+    }
+  }
+}
+
+void CLOSE() {
+
+  if (!digitalRead(seal)) { //closes
+    EEPROM.get(wrapEE, wrapstate);
+    if (wrapstate == 0)
+    {
+
+      if (D == 0) {
+        while (1) {
+          digitalWrite(motor_forward, HIGH);
+          digitalWrite(motor_backward, LOW);
+          delay(500);
+          digitalWrite(motor_forward, LOW);
+          digitalWrite(motor_backward, LOW);
+          digitalWrite(green_led, HIGH);
+          tone(buzzer, 3000);
+          delay(50);
+          noTone(buzzer);
+          C = 0;
+          D = 1;
+          wrapstate = 1;
+          EEPROM.put(wrapEE, wrapstate);
+          event = "&S=WS";
+          access = false;
+          access2 = false;
+          break;
+        }
+      }
+    }
+    else;
+  }
+}
+void Read_card() {
+  MFRC522 nfc(SAD, RST);
+  SPI.begin();
+  nfc.begin();
+  byte status;
+  byte data[MAX_LEN];
+  byte serial[5];
+
+  status = nfc.requestTag(MF1_REQIDL, data);
+
+  if (status == MI_OK) {
+    status = nfc.antiCollision(data);
+    memcpy(serial, data, 5);
+
+    nfc.selectTag(serial);
+
+    status = nfc.authenticate(MF1_AUTHENT1A, 1, keyA, serial);
+    if (status == MI_OK) {
+      status = nfc.readFromTag(1, data);
+      if (status == MI_OK) {
+
+        String a = String(data[0], HEX);
+        int x = a.toInt();;
+
+        if (x == 54) {
+          String card = "";
+          String ReadCard = "";
+
+          ReadCard = "20" + String(data[6], HEX);
+          yearunlock = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[7], HEX);
+          monthunlock = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[8], HEX);
+          dayunlock = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[9], HEX);
+          hourunlock = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[10], HEX);
+          minuteunlock = ReadCard.toInt(); ReadCard = "";
+          secondunlock = 0;
+
+          EEPROM.put(addy, yearunlock); //integer values
+          delay(1);
+          EEPROM.put(addmo, monthunlock); //integer values
+          delay(1);
+          EEPROM.put(addda, dayunlock); //integer values
+          delay(1);
+          EEPROM.put(addh, hourunlock); //integer values
+          delay(1);
+          EEPROM.put(addmi, minuteunlock); //integer values
+          delay(1);
+          secondunlock = 0;
+          EEPROM.put(adds, secondunlock); //integer values
+          delay(1);
+          unlock = 0;
+          EEPROM.put(addunl, unlock);
+          delay(10);
+
+          ReadCard = "20" + String(data[11], HEX);
+          yearunlock2 = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[12], HEX);
+          monthunlock2 = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[13], HEX);
+          dayunlock2 = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[14], HEX);
+          hourunlock2 = ReadCard.toInt(); ReadCard = "";
+          ReadCard = String(data[15], HEX);
+          minuteunlock2 = ReadCard.toInt(); ReadCard = "";
+          secondunlock2 = 0;
+
+          ut = yearunlock;
+          ut += '/';
+          ut += monthunlock;
+          ut += '/';
+          ut += dayunlock;
+          ut += "-";
+          ut += hourunlock;
+          ut += ':';
+          ut += minuteunlock;
+          ut += ':';
+          ut += secondunlock;
+
+          DateTime now = rtc.now();
+
+
+          status = nfc.authenticate(MF1_AUTHENT1A, 2, keyA, serial);
+          if (status == MI_OK) {
+            status = nfc.readFromTag(2, data);
+
+            if (status == MI_OK) {
+              ReadCard = String(data[0], HEX);
+              card = ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[1], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[2], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[3], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[4], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[5], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[6], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[7], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              ReadCard = String(data[8], HEX);
+              card += ReadCard.substring(1); ReadCard = "";
+              Sealcard = card; card = "";
+              usedcard = Sealcard;
+              TimeCard = 1;
+              event = "&S=UT&UT=" + ut + "&C=" + usedcard;
+              ut = "";
+              usedcard = "";
+              tone(buzzer, 3000);
+              delay(100);
+              noTone(buzzer);
+
+              while (1) {
+                if (now.year() > yearunlock) {
+                  unlock = 1;
+                  EEPROM.put(addunl, unlock);
+                  break;
+                }
+                if (now.month() > monthunlock) {
+                  unlock = 1;
+                  EEPROM.put(addunl, unlock);
+                  break;
+                }
+                if (now.day() > dayunlock) {
+                  unlock = 1;
+                  EEPROM.put(addunl, unlock);
+                  break;
+                }
+                if (now.hour() > hourunlock) {
+                  unlock = 1;
+                  EEPROM.put(addunl, unlock);
+                  break;
+                }
+                if (now.minute() > minuteunlock) {
+                  unlock = 1;
+                  EEPROM.put(addunl, unlock);
+                  break;
+                }
+                else {
+                  break;
+                }
+                break;
+              }
+              delay(2000);
+            }
+          }
+        }
+
+        else if (x == 39) {
+
+          String card = "";
+          String ReadCard = "";
+
+          ReadCard = String(data[0], HEX);
+          card = ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[1], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[2], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[3], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[4], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[5], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[6], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          ReadCard = String(data[7], HEX);
+          card += ReadCard.substring(1); ReadCard = "";
+          //ReadCard = String(data[8], HEX);
+          //card += ReadCard.substring(1); ReadCard = "";
+          Unsealcard = card;
+          card = "";
+          usedcard = Unsealcard;
+
+
+          if (Unsealcard.substring(0, j) == card1.substring(0, j)) {
+            access = true;
+          }
+          else {
+            access = false;
+            tone(buzzer, 4000);
+            delay(50);
+            noTone(buzzer);
+            delay(50);
+            tone(buzzer, 4000);
+            delay(50);
+            noTone(buzzer);
+            delay(50);
+          }
+        }
+        else if (x == 47) {
+          if (!digitalRead(bt_ctrl))
+          {
+            digitalWrite(key, LOW);
+            digitalWrite(bt_ctrl, HIGH);
+            delay(100);
+            Serial.begin(9600); //bluetooth
+            tone(buzzer, 1000);
+            delay(100);
+            noTone(buzzer);
+            delay(100);
+            tone(buzzer, 3000);
+            delay(100);
+            noTone(buzzer);
+            delay(100);
+            tone(buzzer, 1000);
+            delay(100);
+            noTone(buzzer);
+            //            TimeCard = 1;
+            //            event = "&S = BT&BT = 1";
+            delay(1500);
+          }
+          else
+          {
+            digitalWrite(bt_ctrl, LOW);
+            digitalWrite(key, HIGH);
+            delay(100);
+            tone(buzzer, 1000);
+            delay(100);
+            noTone(buzzer);
+            //            TimeCard = 1;
+            //            event = "&S = BT&BT = 0";
+            delay(2000);
+          }
+        }
+        else {
+          ;
+        }
+      }
+    }
+    else {
+      ;
+    }
+  }
+  nfc.haltTag();
+}
+
+
+void battery_voltage()
+{
+  //calculate battery voltaget
+  float vout = 0.0;
+  float R1 = 10000.0; // resistance of R1 (100K) -see text!
+  float R2 = 1000.0; // resistance of R2 (1K) - see text!
+  int value = 0;
+
+  relate = relate + 1;
+  if (relate > 10000)
+    relate = 1;
+
+  value = analogRead(readbat);
+  vout = (value * 1.14) / 1024.0; // see text
+  vin = vout / (R2 / (R1 + R2));
+
+  //calculate to percentage
+  float aa = vin - 3.4;// max=4.2. min 3.4. 4.2-3.4=0.8
+  if ((aa > 0.0) && (aa <= 0.8))
+    bat = (aa * 125); //(aa*(100/0.8))
+  if (aa > 0.8)
+    bat = 100; //
+  if (aa < 0.0)
+    bat = 0; //
+
+
+  int inputcharge = analogRead(charging_voltage);
+  float ch_vout = (inputcharge * 1.14) / 1024.0; // see text
+  float ch_vin = ch_vout / (R2 / (R1 + R2));
+
+  int charg = analogRead(A5);
+  int fullycharge = analogRead(A6);
+  int charging = map(charg, 0, 1023, 255, 0);
+  int fullycharged = map(fullycharge, 0, 1023, 255, 0);
+
+  if (ch_vin > 3.0)
+  {
+    //    if (charging < 20)
+    //    {
+    //      digitalWrite(green_led, LOW);
+    //      digitalWrite(red_led, HIGH);
+    //    }
+    //    else if (charging > 20)
+    //    {
+    //      digitalWrite(green_led, HIGH);
+    //      digitalWrite(red_led, LOW);
+    //    }
+
+    if (vin > 4.4)
+    {
+      digitalWrite(green_led, LOW);
+      digitalWrite(red_led, HIGH);
+    }
+    else if (vin < 4.4)
+    {
+      digitalWrite(green_led, HIGH);
+      digitalWrite(red_led, LOW);
+    }
+
+    if (chReset == 1) {
+      chReset = 0;
+    }
+  }
+
+  if (ch_vin < 3.0)
+  {
+    digitalWrite(green_led, HIGH);
+    digitalWrite(red_led, HIGH);
+
+    if (vin >= 3.5)
+    {
+      if (relate % 50 == 0) {
+        digitalWrite(red_led, HIGH);
+        digitalWrite(green_led, LOW);
+        delay(50);
+        digitalWrite(green_led, HIGH);
+        delay(50);
+      }
+    }
+    if (vin < 3.5)
+    {
+      if (relate % 50 == 0) {
+        digitalWrite(green_led, HIGH);
+        digitalWrite(red_led, LOW);
+        delay(50);
+        digitalWrite(red_led, HIGH);
+        delay(50);
+      }
+
+      if (chReset == 0) {
+        offGSM();
+        digitalWrite(gps_ctrl, LOW);
+        chReset = 1;
+      }
+    }
+    //    if (vin < 3.2) //0%
+    //      digitalWrite(gps_ctrl, LOW);
+  }
+}
+void gsmreceived()
+{
+  if (Serial2.available())
+  {
+    String Grsp = Serial2.readString();
+    if (Grsp.substring(2, 6) == "RING") {
+      usedcard = "Call_Unlock";
+      access2 = true;
+      delay(200);
+      Serial2.println("ATH");
+      delay(1000);
+      Serial2.println("ATH");
+    }
+    else {
+      ;
+    }
+  }
+}
+
+
+void SendMessage()
+{
+  String sendmum = "AT+CMGS=";
+  sendmum += line;
+  sendmum += "\r";
+  String mgs = "EMERGENCY!!! Tamper Alert on ";
+  mgs += id;
+  mgs += ", Location: maps.google.com/maps?q=";
+  mgs += Lat;//String(Lat, 6);
+  mgs += ",";
+  mgs += Long;//String(Long, 6);;
+  mgs += "";
+
+  Serial2.println(sendmum); // Replace x with mobile number
+  delay(100);
+  Serial2.println(mgs);// The SMS text you want to send
+  sendmum = "";
+  mgs = "";
+  delay(100);
+  Serial2.println((char)26);// ASCII code of CTRL+Z
+  delay(100);
+}
+
+void getsavedsettings() {
+  if (EEPROM.read(addip) != 255) {
+    ip = read_String(addip);
+    Serial.print("IP: "); Serial.println(ip);
+  }
+  if (EEPROM.read(addhost) != 255) {
+    host = read_String(addhost);
+    Serial.print("Host: "); Serial.println(host);
+  }
+  if (EEPROM.read(addapn) != 255) {
+    apn = read_String(addapn);
+    Serial.print("APN: "); Serial.println(apn);
+  }
+  if (EEPROM.read(addde) != 255) {
+    id = read_String(addde);
+    Serial.print("Device ID: "); Serial.println(id);
+  }
+  if (EEPROM.read(addline) != 255) {
+    line = read_String(addline);
+    Serial.print("Line: "); Serial.println(line);
+  }
+  if (EEPROM.read(addc1) != 255) {
+    card1 = read_String(addc1);
+    Serial.print("Registered card: "); Serial.println(card1);
+  }
+  if (EEPROM.read(adlat) != 255) {
+    Lat = read_String(adlat);
+    Serial.print("Lat: "); Serial.println(Lat);
+  }
+  if (EEPROM.read(adlong) != 255) {
+    Long = read_String(adlong);
+    Serial.print("Long: "); Serial.println(Long);
+  }
+
+  //  if (EEPROM.read(sleepTime) != 255) {
+  //    EEPROM.get(sleepTime, goTosleepNow);
+  //
+  //    if (goTosleepNow > 4000000) {
+  //      goTosleepNow = 600000;
+  //      EEPROM.put(sleepTime, goTosleepNow);
+  //    }
+  //    Serial.print("Awake Time= ");
+  //    Serial.println(goTosleepNow);
+  //  }
+
+  if (EEPROM.read(adgpsstate) != 255) {
+    EEPROM.get(adgpsstate, gps_status);
+    Serial.print("GPS Status= ");
+    Serial.println(gps_status);
+  }
+  if (EEPROM.read(addunl) != 255) {
+    EEPROM.get(addunl, unlock);
+    Serial.print("unlock ");
+    Serial.println(unlock);
+  }
+  if (EEPROM.read(addy) != 255) {
+    EEPROM.get(addy, yearunlock);
+    EEPROM.get(addmo, monthunlock);
+    EEPROM.get(addda, dayunlock);
+    EEPROM.get(addh, hourunlock);
+    EEPROM.get(addmi, minuteunlock);
+    EEPROM.get(adds, secondunlock);
+    Serial.print("Unlock Time: ");
+    Serial.print(yearunlock);
+    Serial.print('/');
+    Serial.print(monthunlock);
+    Serial.print('/');
+    Serial.print(dayunlock);
+    Serial.print("  ");
+    Serial.print(hourunlock);
+    Serial.print(':');
+    Serial.print(minuteunlock);
+    Serial.print(':');
+    Serial.println(secondunlock);
+  }
+}
+
+void DateTimeupdate() {
+  DateTime now = rtc.now();
+  Date = String(now.unixtime());
+}
+
+void gpsget() {
+
+  while (Serial1.available() > 0) {
+    gps.encode(Serial1.read());
+    if (gps.location.isUpdated()) {
+
+      //Serial.println("Searching for Location  ");
+      float LatNew = gps.location.lat();
+      float LongNew = gps.location.lng();
+
+      if ((abs(LatNew) < 1) || (abs(LongNew) < 1)) {
+        GPS_Checker = GPS_Checker + 1;
+
+        if (GPS_Checker > 10) {
+          Lat = String(LatNew, 6);
+          Long = String(LongNew, 6);
+          gps_status = 1;
+          EEPROM.put(adgpsstate, gps_status);
+          LAT = Lat;
+          LONG = Long;
+          GPS_Checker = 0;
+        }
+      }
+      else {
+        Lat = String(LatNew, 6);
+        Long = String(LongNew, 6);
+        gps_status = 1;
+        EEPROM.put(adgpsstate, gps_status);
+        LAT = Lat;
+        LONG = Long;
+        GPS_Checker = 0;
+      }
+
+      if ((LAT.substring(0, 5) != LAT2.substring(0, 5)) || (LONG.substring(0, 5) != LONG2.substring(0, 5)))
+      {
+        LAT2 = LAT;
+        LONG2 = LONG;
+        event = "&S=LC";
+        locationchanged = 1;
+        writeString(adlat, Lat);
+        delay(5);
+        writeString(adlong, Long);
+        delay(5);
+        //savedataupdate();
+      }
+      else {
+        locationchanged = 0;
+      }
+    }
+  }
+}
+
+void CheckWhenBusy() {
+  Read_card();
+  CLOSE();
+  control();
+
+  if (wrap_hold != wrapstate) {
+    DateTimeupdate();
+    savedataupdate();
+    wrap_hold = wrapstate;
+  }
+}
+
+void dataReceive() {
+  String SendCmd = "AT+CIPSEND=";
+  String Start = "AT+CIPSTART=\"TCP\"";
+  String url = "";
+  url = "GET /api/cmd?De=";
+  url += id;
+  url += " HTTP/1.1\r\n";
+  url += "Host: ";
+  url += host;
+  url += "\r\n\r\n";
+
+  initGPRS();
+
+  String svr = Start + "," + ip + "," + port;
+  connectGSM(svr, "CONNECT OK");
+  int len = url.length();
+  String str = "";
+  str = SendCmd + len + "\r\n";
+  connectGSM(str, '>');
+  while (1)
+  {
+    //Serial.println("Checkin DB.....");
+    Serial2.println(url);
+    delay(1000);
+    while (Serial2.available() > 0)
+    {
+      if (Serial2.find("yes"))
+      {
+        usedcard = "Web_Unlock";
+        access2 = true;
+        Serial.print("access2");
+        Serial.print('=');
+        Serial.println("Web_Unlock");
+        a = 1;
+        delay(50);
+        return;
+      }
+
+      break;
+    }
+    a = a + 1;
+
+    if (a > 3) {
+      c = c + 1;
+
+      if (c > 3) {
+        Serial.println("No cmd");
+        c = 0;
+        d = 0;
+        offGSM();
+        delay(1000);
+        initGSM();
+        a = 1;
+        break;
+      }
+      a = 1;
+      break;
+    }
+  }
+  connectGSM("AT+CIPSHUT", "OK");
+}
+
+void dataSend() {
+  String SendCmd = "AT+CIPSEND=";
+  String Start = "AT+CIPSTART=\"TCP\"";
+  String url = "";
+  url = "GET /api/log?DE=";
+  url += id;
+  url += "&LA=";
+  url += Lat;//String(Lat, 6);
+  url += "&LO=";
+  url += Long;//String(Long, 6);;
+  url += "&GS=";
+  url += gps_status;
+  url += "&W=";
+  url += wrapstate;
+  url += "&D=";
+  url += Date;
+  url += "&B=";
+  url += bat;
+  url += event;
+  url += " HTTP/1.1\r\n";
+  url += "Host: ";
+  url += host;
+  url += "\r\n\r\n";
+
+  Surl2 = "";
+  Surl2 = "&LA=";
+  Surl2 += Lat;//String(Lat, 6);
+  Surl2 += "&LO=";
+  Surl2 += Long;//String(Long, 6);;
+  Surl2 += "&GS=";
+  Surl2 += gps_status;
+  Surl2 += "&W=";
+  Surl2 += wrapstate;
+  Surl2 += "&D=";
+  Surl2 += Date;
+  Surl2 += "&B=";
+  Surl2 += bat;
+  Surl2 += event;
+
+
+  wrap_hold = wrapstate;
+
+  initGPRS();
+
+  String svr = Start + "," + ip + "," + port;
+  connectGSM(svr, "CONNECT OK");
+  int len = url.length();
+  String str = "";
+  str = SendCmd + len + "\r\n";
+  connectGSM(str, '>');
+
+  while (1)
+  {
+    Serial2.println(url);
+    delay(500);
+    CheckWhenBusy();
+
+    while (Serial2.available() > 0)
+    {
+      if (Serial2.find("OK"))
+      {
+        Serial.println("Send Successful");
+        d = d + 1;
+        a = 1;
+        delay(50);
+        return;
+      }
+      break;
+    }
+    a = a + 1;
+
+    if (a > 3) {
+      Serial.println("Send Failed");
+      lastSlept = millis();
+      savedataupdate2();
+      c = c + 1;
+
+      if (c > 3) {
+        c = 0;
+        d = 0;
+        offGSM();
+        delay(1000);
+        initGSM();
+        a = 1;
+        break;
+      }
+      a = 1;
+      break;
+    }
+  }
+  delay(100);
+  connectGSM("AT+CIPSHUT", "OK");
+  event = ""; Surl2 = "";
+}
+
+void initGSM()
+{
+  onGSM();
+  Serial2.begin(9600);   // Setting the baud rate of GSM Module
+  delay(1000);
+  CheckWhenBusy();
+  delay(1000);
+  CheckWhenBusy();
+  delay(1000);
+  CheckWhenBusy();
+  connectGSM("AT", "OK");
+  connectGSM("AT+CIPSHUT", "OK");
+  connectGSM("AT+CLTS=1;&W", "OK");
+  connectGSM("AT+CFUN=1,1", "OK");
+  connectGSM("AT", "OK");
+}
+
+void initGPRS()
+{
+  connectGSM("AT+CGATT=1", "OK");
+  connectGSM(apn, "OK");
+  connectGSM("AT+CIICR", "OK");
+  delay(100);
+  Serial2.println("AT+CIFSR");
+  delay(1000);
+  CheckWhenBusy();
+  //connectGSM("AT+CIPSSL=1", "OK"); //https
+}
+
+
+void connectGSM (String cmd, char *res)
+{
+  while (1)
+  {
+    Serial2.println(cmd);
+    delay(500);
+    CheckWhenBusy();
+
+    while (Serial2.available() > 0)
+    {
+      if (Serial2.find(res))
+      {
+        a = 1;
+        delay(50);
+        return;
+      }
+      break;
+    }
+
+    a = a + 1;
+
+    if (a > 3) {
+      a = 1;
+      break;
+    }
+  }
+}
+
+void sendsaveddata()
+{
+  EEPROM.get(noEE, nosave);
+  if (nosave < 0)
+    nosave = 0;
+  if (nosave > 0) {
+    EEPROM.get(adEE, addr);
+
+    addr = addr - 100;
+    String v = "";
+    v = read_String(addr);
+    Surl2 = "";
+    Surl2 = v;
+    nosave = nosave - 1;
+    EEPROM.put(noEE, nosave);
+    EEPROM.put(adEE, addr);
+    delay(10);
+
+    String SendCmd = "AT+CIPSEND=";
+    String Start = "AT+CIPSTART=\"TCP\"";
+    String Gurl = "";
+    Gurl = "GET /api/log?DE=";
+    Gurl += id;
+    Gurl += v;
+    Gurl += " HTTP/1.1\r\n";
+    Gurl += "Host: ";
+    Gurl += host;
+    Gurl += "\r\n\r\n";
+
+    initGPRS();
+
+    String svr = Start + "," + ip + "," + port;
+    connectGSM(svr, "CONNECT OK");
+    int len = Gurl.length();
+    String str = "";
+    str = SendCmd + len + "\r\n";
+    connectGSM(str, '>');
+
+    while (1)
+    {
+      Serial2.println(Gurl);
+      delay(500);
+      CheckWhenBusy();
+
+      while (Serial2.available() > 0)
+      {
+        if (Serial2.find("OK"))
+        {
+          Serial.println("Resend Successful");
+          d = d + 1;
+          a = 1;
+          delay(50);
+          return;
+        }
+        break;
+      }
+      a = a + 1;
+
+      if (a > 2) {
+        Serial.println("Resend Failed");
+        lastSlept = millis();
+        savedataupdate2();
+        c = c + 1;
+
+        if (c > 3) {
+          c = 0;
+          d = 0;
+          offGSM();
+          delay(2000);
+          initGSM();
+          a = 1;
+          break;
+        }
+        a = 1;
+        break;
+      }
+    }
+    delay(100);
+    connectGSM("AT+CIPSHUT", "OK");
+  }
+}
+
+void savedataupdate() {
+  if (EEPROM.read(noEE) != 255)
+    EEPROM.get(noEE, nosave);
+  if (EEPROM.read(adEE) != 255)
+    EEPROM.get(adEE, addr);
+
+  String Surl = "&LA=";
+  Surl += Lat;//String(Lat, 6);
+  Surl += "&LO=";
+  Surl += Long;//String(Long, 6);;
+  Surl += "&GS=";
+  Surl += gps_status;
+  Surl += "&W=";
+  Surl += wrapstate;
+  Surl += "&D=";
+  Surl += Date;
+  Surl += "&B=";
+  Surl += bat;
+  Surl += event;
+
+  if (addr >= EEPROM.length()) {
+    ;
+  }
+  else {
+    writeString(addr, Surl);
+    nosave = nosave + 1;
+    delay(10);
+    addr = addr + 100;
+    EEPROM.put(noEE, nosave);
+    EEPROM.put(adEE, addr);
+    delay(10);
+  }
+}
+void savedataupdate2() {
+  if (EEPROM.read(noEE) != 255)
+    EEPROM.get(noEE, nosave);
+  if (EEPROM.read(adEE) != 255)
+    EEPROM.get(adEE, addr);
+
+  if (addr >= EEPROM.length()) {
+    ;
+  }
+  else {
+    writeString(addr, Surl2);
+    nosave = nosave + 1;
+    delay(10);
+    addr = addr + 100;
+    EEPROM.put(noEE, nosave);
+    EEPROM.put(adEE, addr);
+    Surl2 = "";
+    delay(10);
+  }
+}
+
+void writeString(int address, String data)
+{
+  int _size = data.length();
+  int i;
+  for (i = 0; i < _size; i++)
+  {
+    EEPROM.write(address + i, data[i]);
+  }
+  EEPROM.write(address + _size, '$');
+}
+
+String read_String(int address)
+{
+  int i = 0;
+  String data = "";
+  char k;
+
+  while (1)
+  {
+    k = EEPROM.read(address + i);
+    if (k == '$')
+      break;
+
+    data += k;
+    i++;
+  }
+  return String(data);
+}
+
+void  bluetoothsetup() {
+  if (Serial.available()) {
+
+    String pos[7] = Serial.readStringUntil('#');
+    String state = pos[0];
+
+    //gprs#www.mtn.com#wap#wap#test.civampems.com#
+
+    if (state == "GPRS") { //gprs setup
+      String apn_set = pos[1];
+      String username = pos[2];
+      String password = pos[3];
+      String ip_set = pos[5];
+
+      if (ip_set != "") {
+        String ip_update = "\"";
+        ip_update += ip_set;
+        ip_update += "\"";
+
+        host = ip_set;
+        ip = ip_update;
+        writeString(addip, ip);
+        delay(1);
+        writeString(addhost, host);
+        delay(1);
+        ip_set = "";
+        ip_update = "";
+
+        Serial.print("IP = ");
+        Serial.println(ip);
+        Serial.print("host = ");
+        Serial.println(host);
+        delay(1000);
+        Serial.println("Resettting Device");
+        digitalWrite(mcuReset, HIGH);
+      }
+
+
+      if (apn_set != " ") {
+        String apn_update = "AT+CSTT=";
+        apn_update += "\"";
+        apn_update += apn_set;
+        apn_update += "\",\"";
+        apn_update += username;
+        apn_update += "\",\"";
+        apn_update += password;
+        apn_update += "\"";
+        apn = apn_update;
+        writeString(addapn, apn);
+        delay(1);
+        apn_set = "";
+        apn_update = "";
+
+        Serial.print("APN = ");
+        Serial.println(apn);
+        delay(1000);
+        Serial.println("Resettting Device");
+        digitalWrite(mcuReset, HIGH);
+      }
+
+      Serial.println();
+    }
+
+    //line#08160608439#
+    if (state == "line") {//Energency numbe setup
+      String newline = pos[1];
+
+      if (newline != line) {
+        line = newline;
+        writeString(addline, line);
+        delay(1);
+        Serial.print("Energency line set to: ");
+        Serial.println(line);
+      }
+      else {
+        Serial.print("Same Number");
+      }
+    }
+
+    //device#A01#
+    if (state == "device") {//device setup
+      String id_set = pos[1];
+
+      if (id_set != "") {
+
+        if (id_set != id) {
+          id = id_set;
+          Serial.println("Loading........");
+          //          for (int i = 0 ; i < EEPROM.length() ; i++) {
+          //            EEPROM.write(i, 255);
+          //          }
+          delay(10);
+          writeString(addde, id);
+          delay(10);
+          Serial.print("Device ID Resetting to: ");
+          Serial.println(id);
+          id_set = "";
+          delay(1000);
+          digitalWrite(bt_ctrl, LOW);
+          delay(1000);
+          digitalWrite(key, HIGH);
+          digitalWrite(buzzer, HIGH);
+          delay(1000);
+          digitalWrite(buzzer, LOW);
+          digitalWrite(bt_ctrl, HIGH);
+          delay(1000);
+
+          Serial.begin(38400);  // HC-05 default speed in AT command more
+          delay(1000);
+
+          Serial.println("AT");
+          delay(1000);
+          Serial.print("AT+NAME=");
+          Serial.println(id);
+          delay(1000);
+          Serial.print("AT+PSWD=");
+          Serial.println(id);
+          delay(1000);
+          Serial.println("AT");
+          delay(1000);
+
+          digitalWrite(buzzer, HIGH);
+          delay(100);
+          digitalWrite(buzzer, LOW);
+          delay(100);
+          digitalWrite(buzzer, HIGH);
+          delay(100);
+          digitalWrite(buzzer, LOW);
+
+          delay(1000);
+          digitalWrite(mcuReset, HIGH);
+        }
+
+        else {
+          ;
+        }
+      }
+    }
+
+    //card#9008043AA#
+    if (state == "card") {//card setup
+      String card = pos[1];
+      card1 = card;
+      writeString(addc1, card1);
+      Serial.print("Card set: ");
+      Serial.println(card1);
+      int lent = card1.length();
+      for (int i = 0; i < lent; i++) {
+        j = i;
+        if (card1.substring(i, i + 1) == "A") {
+          j = i; break;
+        }
+      }
+    }
+
+    //timeset#2019#12#15#23#56#22#
+    if (state == "timeset") {//time setup
+      int year_set = pos[1].toInt();
+      int month_set = pos[2].toInt();
+      int day_set = pos[3].toInt();
+      int hour_set = pos[4].toInt();
+      int minute_set = pos[5].toInt();
+      int second_set = pos[6].toInt();
+
+      yearset = year_set;
+      monthset = month_set;
+      dayset = day_set;
+      hourset = hour_set;
+      minuteset = minute_set;
+      secondset = second_set;
+
+      Serial.print("Device Time set to: ");
+      Serial.print(yearset);
+      Serial.print('/');
+      Serial.print(monthset);
+      Serial.print('/');
+      Serial.print(dayset);
+      Serial.print("  ");
+      Serial.print(hourset);
+      Serial.print(':');
+      Serial.print(minuteset);
+      Serial.print(':');
+      Serial.println(secondset);
+      rtc.adjust(DateTime(yearset, monthset, dayset, hourset, minuteset, secondset));
+    }
+
+    //schedule#2019#11#15#9#16#22#
+    if (state == "schedule") {//schedule unlock setup
+      DateTime now = rtc.now();
+      int year_set = pos[1].toInt();
+      int month_set = pos[2].toInt();
+      int day_set = pos[3].toInt();
+      int hour_set = pos[4].toInt();
+      int minute_set = pos[5].toInt();
+      int second_set = pos[6].toInt();
+
+      yearunlock = year_set;
+      EEPROM.put(addy, yearunlock); //integer values
+      delay(1);
+      monthunlock = month_set;
+      EEPROM.put(addmo, monthunlock); //integer values
+      delay(1);
+      dayunlock = day_set;
+      EEPROM.put(addda, dayunlock); //integer values
+      delay(1);
+      hourunlock = hour_set;
+      EEPROM.put(addh, hourunlock); //integer values
+      delay(1);
+      minuteunlock = minute_set;
+      EEPROM.put(addmi, minuteunlock); //integer values
+      delay(1);
+      secondunlock = second_set;
+      EEPROM.put(adds, secondunlock); //integer values
+      delay(10);
+
+      if ((now.year() == yearunlock) && (now.month() == monthunlock) && (now.day() == dayunlock)
+          && (now.hour() > hourunlock)) {
+        unlock = 1;
+        EEPROM.put(addunl, unlock);
+      }
+      else {
+        unlock = 0;
+        EEPROM.put(addunl, unlock);
+        delay(1);
+      }
+
+      Serial.print("schedule unlock set to: ");
+      Serial.print(yearunlock);
+      Serial.print('/');
+      Serial.print(monthunlock);
+      Serial.print('/');
+      Serial.print(dayunlock);
+      Serial.print("  ");
+      Serial.print(hourunlock);
+      Serial.print(':');
+      Serial.print(minuteunlock);
+      Serial.print(':');
+      Serial.println(secondunlock);
+    }
+
+    //unseal#id#12345# and Reset Device
+    if (state == "unseal")//open wrap
+    {
+      String user = pos[1];
+      String psw = pos[2];
+
+      if ((user == id) && (psw == "12345")) {
+        usedcard = "BT_Unlock";
+        access2 = true;
+      }
+
+      if ((user == "reset") && (psw == "12345")) {
+        Serial.println("Resettting Device");
+        delay(1000);
+        digitalWrite(mcuReset, HIGH);
+      }
+
+      if (user == "sleep") {
+        unsigned long sleepSet = psw.toInt() * 60000;
+        goTosleepNow = sleepSet;
+        EEPROM.put(sleepTime, goTosleepNow);
+        lastSlept = millis();
+        Serial.print("Stay awake Time set to (ms) ");
+        Serial.println(goTosleepNow);
+        delay(1000);
+      }
+    }
+
+    //update#
+    if (state == "update") {//update to app
+      DateTime now = rtc.now();
+      EEPROM.get(noEE, nosave);
+
+      Serial.print("IP: "); Serial.println(ip);
+      Serial.print("APN: "); Serial.println(apn);
+      Serial.print("Device ID: "); Serial.println(id);
+      Serial.print("Registered card: "); Serial.println(card1);
+
+      Serial.print("Device Time: ");
+      Serial.print(now.year(), DEC);
+      Serial.print('/');
+      Serial.print(now.month(), DEC);
+      Serial.print('/');
+      Serial.print(now.day(), DEC);
+      Serial.print(" (");
+      Serial.print(daysOfTheWeek[now.dayOfTheWeek()]);
+      Serial.print(") ");
+      Serial.print(now.hour(), DEC);
+      Serial.print(':');
+      Serial.print(now.minute(), DEC);
+      Serial.print(':');
+      Serial.println(now.second(), DEC);
+
+      Serial.print("Unlock Time: ");
+      Serial.print(yearunlock);
+      Serial.print('/');
+      Serial.print(monthunlock);
+      Serial.print('/');
+      Serial.print(dayunlock);
+      Serial.print("  ");
+      Serial.print(hourunlock);
+      Serial.print(':');
+      Serial.print(minuteunlock);
+      Serial.print(':');
+      Serial.print(secondunlock);
+      Serial.print("  (");
+      Serial.print(unlock);
+      Serial.println(')');
+
+      Serial.print("Battery: ");
+      Serial.print(vin);
+      Serial.print("v, ");
+      Serial.print(bat);
+      Serial.print("%. ");
+      Serial.print("Wrap= ");
+      Serial.print(wrapstate);
+      Serial.print(". ");
+      Serial.print(" Data Logs: ");
+      Serial.println(nosave);
+
+      Serial.print("Energency line: ");
+      Serial.print(line);
+      Serial.print(", sTime(ms) ");
+      Serial.println(goTosleepNow);
+
+      Serial.print("Lat, Long :status ");
+      Serial.print(Lat);
+      Serial.print(", ");
+      Serial.print(Long);
+      Serial.print(" :");
+      Serial.println(gps_status);
+    }
+  }
+}
